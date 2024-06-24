@@ -1,0 +1,7 @@
+F:\Aplicaciones\VisualStudio\Projects\MangoScript\bin\Debug\MangoScript.exe.config
+F:\Aplicaciones\VisualStudio\Projects\MangoScript\bin\Debug\MangoScript.exe
+F:\Aplicaciones\VisualStudio\Projects\MangoScript\bin\Debug\MangoScript.pdb
+F:\Aplicaciones\VisualStudio\Projects\MangoScript\obj\Debug\MangoScript.csproj.AssemblyReference.cache
+F:\Aplicaciones\VisualStudio\Projects\MangoScript\obj\Debug\MangoScript.csproj.CoreCompileInputs.cache
+F:\Aplicaciones\VisualStudio\Projects\MangoScript\obj\Debug\MangoScript.exe
+F:\Aplicaciones\VisualStudio\Projects\MangoScript\obj\Debug\MangoScript.pdb
