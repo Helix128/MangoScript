@@ -1,9 +1,0 @@
-function start
-print:"Hola mundo"
-x=0
-end
-
-function update
-print:x
-x=sum:x,1
-end
