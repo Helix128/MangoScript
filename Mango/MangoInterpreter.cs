@@ -1,23 +1,34 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.ComponentModel.Design;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 
 public class MangoFunction : Attribute
 {
     public string name;
-
+    public string info;
     public MangoFunction(string name)
     {
-        this.name = name; 
+        this.name = name;
+        this.info = "";
+    }
+
+public MangoFunction(string name, string info)
+    {
+        this.name = name;
+        this.info = info;
     }
 }
 
 public class Function
 {
     public string body;
-     
+
     public void Execute()
     {
         MangoInterpreter.RunScript(body);
@@ -35,33 +46,35 @@ public class Script
 
     public void Execute(string function)
     {
-        GetFunction(function).Execute();
+        GetFunction(function)?.Execute();
     }
+
     public Function GetFunction(string name)
     {
-        if (functions.ContainsKey(name))
-        {
-            return functions[name];
-        }
-        else
-        {
-            return null;
-        }
+        return functions.ContainsKey(name) ? functions[name] : null;
     }
 }
 
-public class MangoInterpreter 
+public class MangoInterpreter
 {
     public enum ErrorType
     {
         Unknown,
         InvalidVariable,
-        InvalidFunction
+        InvalidFunction,
+        InvalidArgs
     }
 
     public static string ReturnError(ErrorType errorType = ErrorType.Unknown)
     {
         return "[Mango] Error:" + errorType;
+    }
+
+    public static string PrintError(ErrorType errorType = ErrorType.Unknown)
+    {
+        string error = ReturnError(errorType);
+        Console.WriteLine(error);
+        return error;
     }
 
     static Dictionary<string, MethodInfo> actions;
@@ -71,13 +84,14 @@ public class MangoInterpreter
 
     public static void Initialize()
     {
+        CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         actions = new Dictionary<string, MethodInfo>();
         variables = new Dictionary<string, string>();
         Assembly assembly = Assembly.GetExecutingAssembly();
         var methods = assembly.GetTypes()
-                      .SelectMany(t => t.GetMethods())
-                      .Where(m => m.GetCustomAttributes(typeof(MangoFunction), false).Length > 0)
-                      .ToArray();
+            .SelectMany(t => t.GetMethods())
+            .Where(m => m.GetCustomAttributes(typeof(MangoFunction), false).Length > 0)
+            .ToArray();
         foreach (MethodInfo method in methods)
         {
             string methodName = method.GetCustomAttribute<MangoFunction>().name;
@@ -87,31 +101,23 @@ public class MangoInterpreter
 
     public static void SetVariable(string name, object value)
     {
-        if (variables.ContainsKey(name))
-        {
-            variables[name] = value.ToString();
-        }
-        else
-        {
-            variables.Add(name, value.ToString());
-        }
+        variables[name] = value.ToString();
     }
+
     public static string GetVariable(string name)
     {
-        if (variables.ContainsKey(name))
-        {
-            return variables[name];
-        }
-        else
-        {
-            return null;
-        }
+        return variables.ContainsKey(name) ? variables[name] : null;
     }
+
     public static void ExecuteLine(string line)
     {
         if (line.Contains("//"))
         {
             return;
+        }
+        if (line.Contains("info"))
+        {
+            HandleInfo(line);
         }
         if (line.StartsWith("if"))
         {
@@ -129,6 +135,14 @@ public class MangoInterpreter
         {
             HandleEndif();
         }
+        else if (line.StartsWith("for"))
+        {
+            HandleFor(line);
+        }
+        else if (line.StartsWith("while"))
+        {
+            HandleWhile(line);
+        }
         else if (line.Contains("="))
         {
             if (executeLine) HandleAssignment(line);
@@ -138,7 +152,16 @@ public class MangoInterpreter
             if (executeLine) HandleFunction(line);
         }
     }
-
+    public static void HandleInfo(string line)
+    {
+        string method = line.Split(':')[1];
+        if (actions.Keys.Contains(method))
+        {
+            MethodInfo mInfo = actions[method];
+            MangoFunction func = mInfo.GetCustomAttribute<MangoFunction>();
+            Console.WriteLine("[Mango] "+func.name+": "+func.info);
+        }
+    }
     public static void HandleIf(string line)
     {
         string condition = line.Substring(2).Trim();
@@ -200,29 +223,45 @@ public class MangoInterpreter
 
     public static void HandleAssignment(string line)
     {
-        string[] splitVar = line.Split('=');
-        string varName = splitVar[0].Trim();
-        string varValue = splitVar[1].Trim();
-        if (!variables.ContainsKey(varName))
+        string[] splitVar;
+        string varName;
+        string varValue;
+
+        if (line.Contains("+=") || line.Contains("-=") || line.Contains("*=") || line.Contains("/="))
         {
-            variables.Add(varName, TryEvaluate(varValue));
+            string op = line.Contains("+=") ? "+=" : line.Contains("-=") ? "-=" : line.Contains("*=") ? "*=" : "/=";
+            splitVar = line.Split(new string[] { op }, StringSplitOptions.None);
+            varName = splitVar[0].Trim();
+            varValue = varName + " " + op[0] + " " + splitVar[1].Trim();
         }
         else
         {
-            variables[varName] = TryEvaluate(varValue);
+            splitVar = line.Split('=');
+            varName = splitVar[0].Trim();
+            varValue = splitVar[1].Trim();
         }
+
+        variables[varName] = TryEvaluate(varValue);
     }
 
-    public static void HandleFunction(string line)
+    public static string HandleFunction(string line)
     {
-        string[] split = line.Split(':');
+        int leftP = line.IndexOf('(');
+        int rightP = line.IndexOf(')');
+        if(leftP == -1 || rightP == -1) { return line; }
+        string funcName = new string(line.Take(leftP).ToArray());
+        string paramsFull = new string(line.Skip(leftP+1).Take(rightP - (leftP+1)).ToArray());
+
+        string[] split = paramsFull.Split(",");
         foreach (string functionName in actions.Keys.Reverse())
         {
-            if (split[0] == functionName)
+            if (funcName == functionName)
             {
-                actions[functionName].Invoke(null, new object[] { split[1] });
+               string result = (string)actions[functionName].Invoke(null, new object[] { split });
+               return result;
             }
         }
+        return line;
     }
 
     public static void RunScript(string code)
@@ -269,30 +308,91 @@ public class MangoInterpreter
                 return false;
         }
     }
+    public static void HandleFor(string line)
+    {
+        string[] parts = line.Substring(3).Trim().Split(' ');
+        if (parts.Length != 5 || parts[1] != "=" || parts[3] != "to")
+        {
+            Console.WriteLine(ReturnError(ErrorType.InvalidFunction));
+            return;
+        }
+
+        string varName = parts[0];
+        int start = int.Parse(TryEvaluate(parts[2]));
+        int end = int.Parse(TryEvaluate(parts[4]));
+
+        for (int i = start; i <= end; i++)
+        {
+            SetVariable(varName, i);
+            foreach (string subLine in parts[5].Split(';'))
+            {
+                ExecuteLine(subLine.Trim());
+            }
+        }
+    }
+
+    public static void HandleWhile(string line)
+    {
+        string condition = line.Substring(5).Trim();
+        string[] parts = condition.Split(' ');
+        while (EvaluateCondition(condition))
+        {
+            foreach (string subLine in parts[1].Split(';'))
+            {
+                ExecuteLine(subLine.Trim());
+            }
+        }
+    }
 
     public static string TryEvaluate(string line)
     {
-        string[] split = line.Split(':');
-        string result = null; 
+        string[] operators = { "+", "-", "*", "/" };
+        foreach (string op in operators)
+        {
+            int opPos = line.IndexOf(op);
+            if (opPos > 0)
+            {
+                string left = line.Substring(0, opPos).Trim();
+                string right = line.Substring(opPos + 1).Trim();
+                string leftVal = TryEvaluate(left);
+                string rightVal = TryEvaluate(right);
+
+                if (float.TryParse(leftVal, out float leftNum) && float.TryParse(rightVal, out float rightNum))
+                {
+                    switch (op)
+                    {
+                        case "+":
+                            return (leftNum + rightNum).ToString();
+                        case "-":
+                            return (leftNum - rightNum).ToString();
+                        case "*":
+                            return (leftNum * rightNum).ToString();
+                        case "/":
+                            if (rightNum != 0)
+                            {
+                                return (leftNum / rightNum).ToString();
+                            }
+                            else
+                            {
+                                return ReturnError(ErrorType.InvalidVariable); // Division by zero error
+                            }
+                    }
+                }
+                else if (op == "+" && (!float.TryParse(leftVal, out _) || !float.TryParse(rightVal, out _)))
+                {
+                    return leftVal + rightVal;
+                }
+            }
+        }
+
         foreach (string varName in variables.Keys.Reverse())
         {
-            if (split[0] == varName)
+            if (line == varName)
             {
                 return variables[varName];
             }
         }
-        foreach (string functionName in actions.Keys.Reverse())
-        {
-            if (split[0] == functionName)
-            {
-                return actions[functionName].Invoke(null, new object[] { split[1] }).ToString();
-            }
-        }
-        if (result == null)
-        {
-            return line;
-        }
-        return result;
+        return HandleFunction(line); 
     }
 
     public static Script LoadScript(string code)
@@ -328,6 +428,4 @@ public class MangoInterpreter
         }
         return script;
     }
-
-  
 }
