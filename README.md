@@ -1,4 +1,5 @@
 # MangoScript
- Basic interpreted language made in C# VERY EARLY W.I.P
+Interpreted scripting language made in C#
 
-todo documentation
+# Warning
+This project is in a VERY early state. 
