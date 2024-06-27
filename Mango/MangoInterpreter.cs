@@ -1,12 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.ComponentModel.Design;
-using System.Diagnostics;
-using System.Globalization;
-using System.Linq;
+
 using System.Reflection;
-using System.Threading;
+using System.Text;
 
 public class MangoFunction : Attribute
 {
@@ -18,7 +12,7 @@ public class MangoFunction : Attribute
         this.info = "";
     }
 
-public MangoFunction(string name, string info)
+    public MangoFunction(string name, string info)
     {
         this.name = name;
         this.info = info;
@@ -29,9 +23,9 @@ public class Function
 {
     public string body;
 
-    public void Execute()
+    public async Task Execute()
     {
-        MangoInterpreter.RunScript(body);
+        await MangoInterpreter.RunScript(body);
     }
 }
 
@@ -44,9 +38,9 @@ public class Script
         functions = new Dictionary<string, Function>();
     }
 
-    public void Execute(string function)
+    public async Task Execute(string function)
     {
-        GetFunction(function)?.Execute();
+        await GetFunction(function)?.Execute();
     }
 
     public Function GetFunction(string name)
@@ -67,13 +61,13 @@ public class MangoInterpreter
 
     public static string ReturnError(ErrorType errorType = ErrorType.Unknown)
     {
-        return "[Mango] Error:" + errorType;
+        return "Error:" + errorType;
     }
 
     public static string PrintError(ErrorType errorType = ErrorType.Unknown)
     {
         string error = ReturnError(errorType);
-        Console.WriteLine(error);
+        Console.WriteLine("[Mango] " + error);
         return error;
     }
 
@@ -84,7 +78,6 @@ public class MangoInterpreter
 
     public static void Initialize()
     {
-        CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         actions = new Dictionary<string, MethodInfo>();
         variables = new Dictionary<string, string>();
         Assembly assembly = Assembly.GetExecutingAssembly();
@@ -109,7 +102,7 @@ public class MangoInterpreter
         return variables.ContainsKey(name) ? variables[name] : null;
     }
 
-    public static void ExecuteLine(string line)
+    public static async Task ExecuteLine(string line)
     {
         if (line.Contains("//"))
         {
@@ -131,19 +124,7 @@ public class MangoInterpreter
         {
             HandleElse();
         }
-        else if (line == "endif")
-        {
-            HandleEndif();
-        }
-        else if (line.StartsWith("for"))
-        {
-            HandleFor(line);
-        }
-        else if (line.StartsWith("while"))
-        {
-            HandleWhile(line);
-        }
-        else if (line.Contains("="))
+        else if (line.Contains("=")&&line.Contains("(")==false)
         {
             if (executeLine) HandleAssignment(line);
         }
@@ -152,6 +133,7 @@ public class MangoInterpreter
             if (executeLine) HandleFunction(line);
         }
     }
+
     public static void HandleInfo(string line)
     {
         string method = line.Split(':')[1];
@@ -159,9 +141,10 @@ public class MangoInterpreter
         {
             MethodInfo mInfo = actions[method];
             MangoFunction func = mInfo.GetCustomAttribute<MangoFunction>();
-            Console.WriteLine("[Mango] "+func.name+": "+func.info);
+            Console.WriteLine("[Mango] " + func.name + ": " + func.info);
         }
     }
+
     public static void HandleIf(string line)
     {
         string condition = line.Substring(2).Trim();
@@ -247,32 +230,60 @@ public class MangoInterpreter
     public static string HandleFunction(string line)
     {
         int leftP = line.IndexOf('(');
-        int rightP = line.IndexOf(')');
-        if(leftP == -1 || rightP == -1) { return line; }
+        int rightP = line.LastIndexOf(')');
+        if (leftP == -1 || rightP == -1) { return line; }
         string funcName = new string(line.Take(leftP).ToArray());
-        string paramsFull = new string(line.Skip(leftP+1).Take(rightP - (leftP+1)).ToArray());
-
+        string paramsFull = new string(line.Skip(leftP + 1).Take(rightP - (leftP + 1)).ToArray());
+  
         string[] split = paramsFull.Split(",");
+        for(int i=0; i<split.Length; i++)
+        {
+            split[i] = TryEvaluate(split[i]);
+        }
         foreach (string functionName in actions.Keys.Reverse())
         {
             if (funcName == functionName)
             {
-               string result = (string)actions[functionName].Invoke(null, new object[] { split });
-               return result;
+                string result = (string)actions[functionName].Invoke(null, new object[] { split });
+                return result;
             }
         }
         return line;
     }
 
-    public static void RunScript(string code)
+    public static async Task RunScript(string code)
     {
         string[] sp = code.Split('\n');
         ifStack = new Stack<bool>();
         executeLine = true;
 
-        foreach (string line in sp)
+        Stack<int> blockStack = new Stack<int>();
+        for (int i = 0; i < sp.Length; i++)
         {
-            ExecuteLine(line.Trim());
+            string line = sp[i].Trim();
+            if (line == "{")
+            {
+                blockStack.Push(i);
+            }
+            else if (line == "}")
+            {
+                int startBlock = blockStack.Pop();
+                string[] blockLines = sp.Skip(startBlock + 1).Take(i - startBlock - 1).ToArray();
+                await ExecuteBlock(blockLines);
+                i = startBlock;
+            }
+            else
+            {
+                await ExecuteLine(line);
+            }
+        }
+    }
+
+    public static async Task ExecuteBlock(string[] lines)
+    {
+        foreach (string line in lines)
+        {
+            await ExecuteLine(line);
         }
     }
 
@@ -308,124 +319,174 @@ public class MangoInterpreter
                 return false;
         }
     }
-    public static void HandleFor(string line)
+
+   
+    public static string TryEvaluate(string value)
     {
-        string[] parts = line.Substring(3).Trim().Split(' ');
-        if (parts.Length != 5 || parts[1] != "=" || parts[3] != "to")
-        {
-            Console.WriteLine(ReturnError(ErrorType.InvalidFunction));
-            return;
-        }
+        int firstQuote = value.IndexOf('"');
+        int lastQuote = value.LastIndexOf('"');
 
-        string varName = parts[0];
-        int start = int.Parse(TryEvaluate(parts[2]));
-        int end = int.Parse(TryEvaluate(parts[4]));
-
-        for (int i = start; i <= end; i++)
+        if (firstQuote != -1 && lastQuote != -1 && firstQuote != lastQuote)
         {
-            SetVariable(varName, i);
-            foreach (string subLine in parts[5].Split(';'))
+            string stringPart = value.Substring(firstQuote, lastQuote - firstQuote + 1).Trim('"');
+            string beforeString = value.Substring(0, firstQuote).Trim();
+            string afterString = value.Substring(lastQuote + 1).Trim();
+
+            string evaluatedBefore = TryEvaluate(beforeString);
+            string evaluatedAfter = TryEvaluate(afterString);
+
+            if (evaluatedAfter.StartsWith("+"))
             {
-                ExecuteLine(subLine.Trim());
+                string afterValue = TryEvaluate(evaluatedAfter.Substring(1).Trim());
+                return stringPart + afterValue;
             }
-        }
-    }
-
-    public static void HandleWhile(string line)
-    {
-        string condition = line.Substring(5).Trim();
-        string[] parts = condition.Split(' ');
-        while (EvaluateCondition(condition))
-        {
-            foreach (string subLine in parts[1].Split(';'))
+            else if (evaluatedAfter.StartsWith("*"))
             {
-                ExecuteLine(subLine.Trim());
+                string afterValue = TryEvaluate(evaluatedAfter.Substring(1).Trim());
+                if (int.TryParse(afterValue, out int repeatCount))
+                {
+                    return string.Concat(Enumerable.Repeat(stringPart, repeatCount));
+                }
             }
-        }
-    }
 
-    public static string TryEvaluate(string line)
-    {
+            return stringPart + evaluatedAfter; 
+        }
+
         string[] operators = { "+", "-", "*", "/" };
         foreach (string op in operators)
         {
-            int opPos = line.IndexOf(op);
+            int opPos = value.IndexOf(op);
             if (opPos > 0)
             {
-                string left = line.Substring(0, opPos).Trim();
-                string right = line.Substring(opPos + 1).Trim();
+                string left = value.Substring(0, opPos).Trim();
+                string right = value.Substring(opPos + 1).Trim();
                 string leftVal = TryEvaluate(left);
                 string rightVal = TryEvaluate(right);
 
-                if (float.TryParse(leftVal, out float leftNum) && float.TryParse(rightVal, out float rightNum))
-                {
-                    switch (op)
-                    {
-                        case "+":
-                            return (leftNum + rightNum).ToString();
-                        case "-":
-                            return (leftNum - rightNum).ToString();
-                        case "*":
-                            return (leftNum * rightNum).ToString();
-                        case "/":
-                            if (rightNum != 0)
-                            {
-                                return (leftNum / rightNum).ToString();
-                            }
-                            else
-                            {
-                                return ReturnError(ErrorType.InvalidVariable); // Division by zero error
-                            }
-                    }
-                }
-                else if (op == "+" && (!float.TryParse(leftVal, out _) || !float.TryParse(rightVal, out _)))
-                {
-                    return leftVal + rightVal;
-                }
+                return EvaluateOperator(op, leftVal, rightVal);
             }
         }
 
-        foreach (string varName in variables.Keys.Reverse())
+     
+        foreach (string variable in variables.Keys.OrderByDescending(v => v.Length))
         {
-            if (line == varName)
+            value = value.Replace(variable, variables[variable]);
+        }
+
+        return EvaluateConcatenation(value);
+    }
+
+    private static string EvaluateOperator(string op, string leftVal, string rightVal)
+    {
+        if (float.TryParse(leftVal, out float leftNum) && float.TryParse(rightVal, out float rightNum))
+        {
+            switch (op)
             {
-                return variables[varName];
+                case "+":
+                    return (leftNum + rightNum).ToString();
+                case "-":
+                    return (leftNum - rightNum).ToString();
+                case "*":
+                    return (leftNum * rightNum).ToString();
+                case "/":
+                    if (rightNum != 0)
+                    {
+                        return (leftNum / rightNum).ToString();
+                    }
+                    else
+                    {
+                        return ReturnError(ErrorType.InvalidVariable); // Division by zero error
+                    }
             }
         }
-        return HandleFunction(line); 
+        else if (op == "+" && (!float.TryParse(leftVal, out _) || !float.TryParse(rightVal, out _)))
+        {
+            return leftVal + rightVal;
+        }
+
+        return ReturnError(ErrorType.InvalidVariable); // Default error case
+    }
+
+    private static string EvaluateConcatenation(string value)
+    {
+        string[] parts = value.Split(new[] { '+' }, StringSplitOptions.RemoveEmptyEntries);
+        StringBuilder result = new StringBuilder();
+
+        foreach (string part in parts)
+        {
+            string trimmedPart = part.Trim();
+
+            if (trimmedPart.StartsWith('"') && trimmedPart.EndsWith('"'))
+            {
+                result.Append(trimmedPart.Trim('"'));
+            }
+            else
+            {
+                result.Append(trimmedPart);
+            }
+        }
+
+        return result.ToString();
     }
 
     public static Script LoadScript(string code)
     {
         Script script = new Script();
-        string[] sp = code.Split('\n');
-        string body = "";
-        string name = "";
-        bool readingFunction = false;
-        Function func = null;
+        string[] lines = code.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        Stack<string> blockStack = new Stack<string>();
+        StringBuilder currentBlock = new StringBuilder();
+        string currentFunctionName = null;
 
-        foreach (string line in sp)
+        foreach (string line in lines)
         {
-            string[] splitSpc = line.Trim().Split(' ');
-            if (readingFunction)
+            string trimmedLine = line.Trim();
+
+            if (trimmedLine.StartsWith("function"))
             {
-                body += line + "\n";
+                if (currentFunctionName != null)
+                {
+                    throw new Exception("Nested functions are not supported.");
+                }
+                currentFunctionName = trimmedLine.Split(' ')[1];
+                blockStack.Push("{");
+                currentBlock.AppendLine(trimmedLine);
             }
-            if (splitSpc[0] == "function")
+            else if (trimmedLine == "{" && blockStack.Count > 0)
             {
-                func = new Function();
-                name = splitSpc[1];
-                readingFunction = true;
+                blockStack.Push("{");
+                currentBlock.AppendLine(trimmedLine);
             }
-            else if (splitSpc[0] == "end")
+            else if (trimmedLine == "}" && blockStack.Count > 0)
             {
-                readingFunction = false;
-                func.body = body;
-                script.functions.Add(name, func);
-                body = "";
-                name = "";
+                blockStack.Pop();
+                currentBlock.AppendLine(trimmedLine);
+
+                if (blockStack.Count == 0 && currentFunctionName != null)
+                {
+                    Function function = new Function
+                    {
+                        body = currentBlock.ToString()
+                    };
+                    script.functions.Add(currentFunctionName, function);
+                    currentBlock.Clear();
+                    currentFunctionName = null;
+                }
+            }
+            else
+            {
+                if (blockStack.Count > 0)
+                {
+                    currentBlock.AppendLine(trimmedLine);
+                }
             }
         }
+
+        if (blockStack.Count > 0)
+        {
+            throw new Exception("Mismatched braces in the script.");
+        }
+
         return script;
     }
+
 }

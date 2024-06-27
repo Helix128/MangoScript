@@ -6,11 +6,11 @@ public class MangoStd
     [MangoFunction("print", info = "Prints text to the console.")]
     public static void Print(params string[] str)
     {
+     
         string value = "";
         foreach (string s in str)
         {
-            string tempValue = MangoInterpreter.TryEvaluate(s);
-            value += tempValue + " ";
+            value += s+" ";
         }
         Console.WriteLine("[Mango] " + value);
     }
@@ -21,6 +21,7 @@ public class MangoStd
         float n = 0;
         foreach (string s in str)
         {
+            
             string tempS = MangoInterpreter.TryEvaluate(s);
             float tempN;
             if (float.TryParse(tempS, out tempN))
